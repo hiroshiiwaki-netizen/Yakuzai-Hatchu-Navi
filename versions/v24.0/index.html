@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <!-- 薬剤発注ナビ v24.1 - UI全面改善版 - 最終更新: 2026-01-02 -->
+    <base target="_top">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <?!= include('styles'); ?>
+</head>
+
+<body>
+    <!-- ローディング画面 -->
+    <div id="app-loading">
+        <div class="spinner"></div>
+        <div class="progress-box">
+            <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <p id="loading-text">アプリを起動しています...</p>
+        <button id="skip-btn" onclick="forceStart()">⚠ 読込をスキップして起動</button>
+    </div>
+
+    <!-- ヘッダー -->
+    <header>
+        <div class="header-left">
+            <span class="material-icons header-icon">medication</span>
+            <h1>薬剤発注ナビ</h1>
+        </div>
+        <div class="header-right">
+            <button class="dark-mode-btn" onclick="toggleDarkMode()" title="ダークモード切替">
+                <span class="material-icons" id="dark-mode-icon">dark_mode</span>
+            </button>
+            <span class="user-name" id="header-username">--</span>
+        </div>
+    </header>
+
+    <!-- メインコンテンツ -->
+    <main class="main-content">
+        <!-- 新規登録ボタン（上部固定） -->
+        <div class="action-bar">
+            <button class="register-btn" onclick="openRegisterModal()">
+                <span class="material-icons">add_circle</span>
+                <span>新規登録</span>
+            </button>
+        </div>
+
+        <!-- リストページ -->
+        <div id="page-list" class="page active">
+            <!-- フィルタータブ -->
+            <div class="filter-tabs">
+                <button class="filter-tab active" data-filter="" onclick="setFilter('')">すべて</button>
+                <button class="filter-tab" data-filter="未発注" onclick="setFilter('未発注')">
+                    <span class="tab-badge badge-pending"></span>未発注
+                </button>
+                <button class="filter-tab" data-filter="発注済" onclick="setFilter('発注済')">
+                    <span class="tab-badge badge-ordered"></span>発注済
+                </button>
+                <button class="filter-tab search-tab" onclick="toggleSearch()">
+                    <span class="material-icons">search</span>
+                </button>
+            </div>
+
+            <!-- 検索バー（トグル表示） -->
+            <div id="search-bar" class="search-bar hidden">
+                <input type="text" id="filter-search" placeholder="患者名・薬剤名で検索..." oninput="applyFilters()">
+                <button class="search-close" onclick="toggleSearch()">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+
+            <!-- 担当者フィルター -->
+            <div class="pic-filter">
+                <select id="filter-pic" class="pic-select" onchange="applyFilters()">
+                    <option value="">👤 担当者で絞り込み</option>
+                </select>
+            </div>
+
+            <!-- 発注リスト -->
+            <div class="order-list" id="order-list"></div>
+        </div>
+
+        <!-- 統計ページ -->
+        <div id="page-stats" class="page">
+            <div class="stats-container">
+                <div class="stats-header">
+                    <h2>📊 統計ダッシュボード</h2>
+                    <select id="stats-year" class="stats-year-select" onchange="loadStatistics()">
+                        <script>
+                            const now = new Date();
+                            const currentYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+                            for (let y = currentYear; y >= currentYear - 3; y--) {
+                                document.write(`<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}年度</option>`);
+                            }
+                        </script>
+                    </select>
+                </div>
+
+                <!-- サマリーカード -->
+                <div class="stats-cards">
+                    <div class="stats-card">
+                        <div class="stats-icon"><span class="material-icons">inventory_2</span></div>
+                        <div class="stats-value" id="stats-total">-</div>
+                        <div class="stats-label">年間発注件数</div>
+                    </div>
+                    <div class="stats-card pending">
+                        <div class="stats-icon"><span class="material-icons">pending_actions</span></div>
+                        <div class="stats-value" id="stats-pending">-</div>
+                        <div class="stats-label">未発注</div>
+                    </div>
+                    <div class="stats-card ordered">
+                        <div class="stats-icon"><span class="material-icons">local_shipping</span></div>
+                        <div class="stats-value" id="stats-ordered">-</div>
+                        <div class="stats-label">発注済</div>
+                    </div>
+                    <div class="stats-card warning">
+                        <div class="stats-icon"><span class="material-icons">warning</span></div>
+                        <div class="stats-value" id="stats-overdue">-</div>
+                        <div class="stats-label">期限超過</div>
+                    </div>
+                </div>
+
+                <!-- グラフエリア -->
+                <div class="charts-grid">
+                    <div class="chart-container">
+                        <h3 class="chart-title">月別発注件数</h3>
+                        <canvas id="chart-monthly"></canvas>
+                    </div>
+                    <div class="chart-container">
+                        <h3 class="chart-title">担当者別件数</h3>
+                        <canvas id="chart-pic"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- カレンダーページ -->
+        <div id="page-calendar" class="page">
+            <div class="calendar-container">
+                <div class="calendar-header">
+                    <button class="cal-nav-btn" onclick="changeMonth(-1)">
+                        <span class="material-icons">chevron_left</span>
+                    </button>
+                    <h2 id="calendar-title">2026年1月</h2>
+                    <button class="cal-nav-btn" onclick="changeMonth(1)">
+                        <span class="material-icons">chevron_right</span>
+                    </button>
+                    <button class="cal-today-btn" onclick="goToToday()">
+                        今日
+                    </button>
+                </div>
+
+                <div class="calendar-legend">
+                    <span class="legend-item"><span class="dot pending"></span>未発注</span>
+                    <span class="legend-item"><span class="dot ordered"></span>発注済</span>
+                </div>
+
+                <div class="calendar-weekdays">
+                    <div class="weekday sun">日</div>
+                    <div class="weekday">月</div>
+                    <div class="weekday">火</div>
+                    <div class="weekday">水</div>
+                    <div class="weekday">木</div>
+                    <div class="weekday">金</div>
+                    <div class="weekday sat">土</div>
+                </div>
+
+                <div class="calendar-grid" id="calendar-grid"></div>
+            </div>
+        </div>
+
+        <!-- 履歴ページ（納品済み） -->
+        <div id="page-history" class="page">
+            <div class="history-container">
+                <div class="history-header">
+                    <h2>✅ 納品済み履歴</h2>
+                    <select id="history-period" class="history-period-select" onchange="loadHistory()">
+                        <option value="30">過去30日</option>
+                        <option value="90">過去3ヶ月</option>
+                        <option value="180">過去6ヶ月</option>
+                        <option value="365">過去1年</option>
+                    </select>
+                </div>
+                <div class="history-list" id="history-list"></div>
+            </div>
+        </div>
+
+        <!-- 操作ログページ -->
+        <div id="page-logs" class="page">
+            <div class="logs-container">
+                <div class="logs-header">
+                    <h2>📝 操作ログ</h2>
+                </div>
+
+                <!-- フィルターバー -->
+                <div class="logs-filters">
+                    <select id="log-period" class="log-filter-select" onchange="loadLogs()">
+                        <option value="7">過去7日</option>
+                        <option value="30" selected>過去30日</option>
+                        <option value="90">過去3ヶ月</option>
+                        <option value="180">過去6ヶ月</option>
+                    </select>
+                    <select id="log-action" class="log-filter-select" onchange="filterLogs()">
+                        <option value="">全操作</option>
+                        <option value="登録">登録</option>
+                        <option value="更新">更新</option>
+                        <option value="削除">削除</option>
+                        <option value="ステータス">ステータス変更</option>
+                        <option value="担当者">担当者変更</option>
+                    </select>
+                    <select id="log-user" class="log-filter-select" onchange="filterLogs()">
+                        <option value="">全ユーザー</option>
+                    </select>
+                </div>
+
+                <!-- ログ統計 -->
+                <div class="logs-summary" id="logs-summary"></div>
+
+                <!-- ログリスト -->
+                <div class="logs-list" id="logs-list"></div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 一括操作バー -->
+    <div id="bulk-bar" class="bulk-bar">
+        <span class="bulk-count" id="bulk-count">0件選択中</span>
+        <div class="bulk-actions">
+            <button class="bulk-btn ordered" onclick="bulkOrdered()">
+                <span class="material-icons">local_shipping</span>一括発注済
+            </button>
+            <button class="bulk-btn delete" onclick="bulkDelete()">
+                <span class="material-icons">delete</span>一括削除
+            </button>
+            <button class="bulk-btn cancel" onclick="cancelBulkSelect()">キャンセル</button>
+        </div>
+    </div>
+
+    <!-- ボトムナビゲーション -->
+    <nav class="bottom-nav">
+        <button class="nav-item active" data-page="list" onclick="switchPage('list')">
+            <span class="nav-emoji">📋</span>
+            <span>リスト</span>
+        </button>
+        <button class="nav-item" data-page="calendar" onclick="switchPage('calendar')">
+            <span class="nav-emoji">📅</span>
+            <span>カレンダー</span>
+        </button>
+        <button class="nav-item" data-page="history" onclick="switchPage('history')">
+            <span class="nav-emoji">✅</span>
+            <span>履歴</span>
+        </button>
+        <button class="nav-item" data-page="logs" onclick="switchPage('logs')">
+            <span class="nav-emoji">📝</span>
+            <span>ログ</span>
+        </button>
+        <button class="nav-item" data-page="stats" onclick="switchPage('stats')">
+            <span class="nav-emoji">📊</span>
+            <span>統計</span>
+        </button>
+    </nav>
+
+    <!-- 新規登録モーダル -->
+    <div id="register-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>💊 新規発注登録</h3>
+                <button class="modal-close" onclick="closeModal('register-modal')">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+
+            <div class="form-group">
+                <label>患者名 <span class="required">*</span></label>
+                <div class="search-container">
+                    <input type="text" id="patientSearch" placeholder="氏名またはカナで検索..." autocomplete="off">
+                    <div id="suggestions" class="suggestions"></div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>薬剤名</label>
+                <input type="text" id="drug" placeholder="例：〇〇注射液">
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>発注期限日 <span class="required">*</span></label>
+                    <input type="date" id="deadline">
+                </div>
+                <div class="form-group">
+                    <label>投与予定日</label>
+                    <input type="date" id="admin">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>担当者</label>
+                <input type="text" id="staff-name-display" readonly>
+                <input type="hidden" id="staff-email-hidden">
+            </div>
+
+            <button class="submit-btn" onclick="save()">
+                <span class="material-icons">check</span>登録する
+            </button>
+        </div>
+    </div>
+
+    <!-- 編集モーダル -->
+    <div id="edit-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📋 詳細・編集</h3>
+                <button class="modal-close" onclick="closeModal('edit-modal')">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+
+            <input type="hidden" id="edit-id">
+            <input type="hidden" id="edit-status">
+
+            <div class="form-group">
+                <label>患者名</label>
+                <div class="search-container">
+                    <input type="text" id="edit-patient" placeholder="氏名またはカナで検索..." autocomplete="off">
+                    <div id="edit-suggestions" class="suggestions"></div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>薬剤名</label>
+                <input type="text" id="edit-drug">
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>発注期限日</label>
+                    <input type="date" id="edit-deadline">
+                </div>
+                <div class="form-group">
+                    <label>投与予定日</label>
+                    <input type="date" id="edit-admin">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>担当者</label>
+                <select id="edit-pic-select"></select>
+            </div>
+
+            <div id="status-action-area"></div>
+
+            <button class="submit-btn secondary" onclick="updateOrder()">
+                <span class="material-icons">save</span>内容を保存
+            </button>
+
+            <button class="delete-btn" onclick="deleteOrder()">
+                <span class="material-icons">delete_outline</span>この予定を削除
+            </button>
+        </div>
+    </div>
+
+    <?!= include('scripts'); ?>
+</body>
+
+</html>

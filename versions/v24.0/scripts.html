@@ -1,0 +1,1158 @@
+<script>
+    /**
+     * 薬剤発注ナビ v24.1 - クライアントサイドスクリプト (UI全面改善版)
+     * scripts.html
+     * 最終更新: 2026-01-02
+     */
+
+    // ===== グローバル変数 =====
+    let patientsMaster = [];
+    let staffMaster = [];
+    let currentUser = {};
+    let allOrders = [];
+    let selectedIds = new Set();
+    let loadTimer;
+    let currentPage = 'list';
+    let currentFilter = '';
+
+    // ===== 初期化 =====
+    window.onload = () => {
+        loadTimer = setTimeout(() => {
+            document.getElementById('skip-btn').style.display = 'block';
+            document.getElementById('loading-text').innerText = '通信が遅れています...';
+        }, 5000);
+        step1_Auth();
+    };
+
+    function forceStart() {
+        clearTimeout(loadTimer);
+        document.getElementById('app-loading').style.display = 'none';
+    }
+
+    function updateProgress(percent, text) {
+        document.getElementById('progress-bar').style.width = percent + '%';
+        document.getElementById('loading-text').innerText = text;
+    }
+
+    // ===== 認証 =====
+    function step1_Auth() {
+        updateProgress(10, 'ユーザー認証中...');
+        google.script.run.withSuccessHandler(res => {
+            if (!res.success) {
+                console.error(res.message);
+                alert(res.message);
+                return;
+            }
+            currentUser = { email: res.email, name: res.email };
+            document.getElementById('header-username').innerText = res.email;
+            document.getElementById('staff-email-hidden').value = res.email;
+            step2_Masters();
+        }).withFailureHandler(e => {
+            console.error('認証エラー:', e);
+            step2_Masters();
+        }).step1_SimpleAuth();
+    }
+
+    // ===== マスターデータ取得 =====
+    function step2_Masters() {
+        updateProgress(40, 'マスターデータ取得中...');
+        google.script.run.withSuccessHandler(res => {
+            if (res.patients) patientsMaster = res.patients;
+            if (res.staff) {
+                staffMaster = res.staff;
+                const me = staffMaster.find(s => s.email === currentUser.email);
+                if (me) {
+                    currentUser.name = me.name;
+                    currentUser.role = me.role || '';
+                    currentUser.dept = me.dept || '';
+
+                    // 「名前(所属デポ 職種)」形式で表示
+                    let displayText = me.name;
+                    if (me.dept || me.role) {
+                        const details = [me.dept, me.role].filter(x => x).join(' ');
+                        displayText = `${me.name}(${details})`;
+                    }
+                    document.getElementById('header-username').innerText = displayText;
+                    document.getElementById('staff-name-display').value = me.name;
+                } else {
+                    document.getElementById('staff-name-display').value = currentUser.email;
+                }
+                populateStaffSelects();
+            }
+            step3_Orders();
+        }).withFailureHandler(e => {
+            console.error('マスター取得エラー:', e);
+            step3_Orders();
+        }).step2_GetMasters();
+    }
+
+    // ===== 発注リスト取得 =====
+    function step3_Orders() {
+        updateProgress(70, '発注リスト取得中...');
+        google.script.run.withSuccessHandler(res => {
+            if (res.orders) {
+                allOrders = res.orders;
+                applyFilters();
+            }
+            updateProgress(100, '完了');
+            clearTimeout(loadTimer);
+            setTimeout(() => document.getElementById('app-loading').style.display = 'none', 300);
+        }).withFailureHandler(e => {
+            console.error('リスト取得エラー:', e);
+            alert('リスト読込失敗: ' + e);
+        }).step3_GetOrders();
+    }
+
+    // ===== スタッフ選択肢を設定 =====
+    function populateStaffSelects() {
+        const filterSelect = document.getElementById('filter-pic');
+        const editSelect = document.getElementById('edit-pic-select');
+
+        filterSelect.innerHTML = '<option value="">👤 担当者で絞り込み</option>';
+        staffMaster.forEach(s => {
+            filterSelect.innerHTML += `<option value="${s.email}">${s.name}</option>`;
+        });
+
+        editSelect.innerHTML = '';
+        staffMaster.forEach(s => {
+            editSelect.innerHTML += `<option value="${s.email}">${s.name}</option>`;
+        });
+    }
+
+    // ===== 検索サジェスト =====
+    function setupSearch(inputId, suggestId) {
+        const input = document.getElementById(inputId);
+        const box = document.getElementById(suggestId);
+        let isComposing = false; // 日本語変換中フラグ
+
+        function doSearch() {
+            // 変換中は検索しない
+            if (isComposing) {
+                console.log('変換中のためスキップ');
+                return;
+            }
+
+            const val = input.value.trim();
+            console.log('検索:', val, 'マスター件数:', patientsMaster.length);
+            box.innerHTML = '';
+            if (!val) {
+                box.style.display = 'none';
+                return;
+            }
+            const matches = patientsMaster.filter(p =>
+                (p.name && p.name.includes(val)) || (p.kana && p.kana.includes(val))
+            );
+            console.log('マッチ数:', matches.length);
+            if (matches.length > 0) {
+                box.style.display = 'block';
+                matches.slice(0, 10).forEach(p => {
+                    const div = document.createElement('div');
+                    div.className = 'suggestion-item';
+                    div.innerHTML = `${p.name}<span class="suggestion-sub">${p.kana || ''}</span>`;
+                    div.onclick = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        input.value = p.name;
+                        box.style.display = 'none';
+                    };
+                    box.appendChild(div);
+                });
+            } else {
+                box.style.display = 'none';
+            }
+        }
+
+        // 日本語入力開始
+        input.addEventListener('compositionstart', () => {
+            isComposing = true;
+            console.log('変換開始');
+        });
+
+        // 日本語入力確定時 → 検索実行
+        input.addEventListener('compositionend', () => {
+            isComposing = false;
+            console.log('変換確定');
+            doSearch();
+        });
+
+        // 通常入力（英数字など）
+        input.addEventListener('input', doSearch);
+
+        // フォーカス時にも検索
+        input.addEventListener('focus', () => {
+            if (input.value.trim() && !isComposing) {
+                doSearch();
+            }
+        });
+
+        // blurでは閉じない（クリック/タップで閉じる）
+    }
+    setupSearch('patientSearch', 'suggestions');
+    setupSearch('edit-patient', 'edit-suggestions');
+
+    // ドキュメント全体のタップで候補リストを閉じる（モーダル外のみ）
+    document.addEventListener('click', (e) => {
+        // モーダル内のクリックは無視
+        if (e.target.closest('.modal-content')) return;
+        // 入力欄やサジェスト内のクリックは無視
+        if (e.target.closest('.search-container')) return;
+        if (e.target.closest('.suggestions')) return;
+
+        const suggestions = document.querySelectorAll('.suggestions');
+        suggestions.forEach(box => {
+            box.style.display = 'none';
+        });
+    });
+
+    // ===== フィルター =====
+    function setFilter(filter) {
+        currentFilter = filter;
+
+        // タブのアクティブ状態を更新
+        document.querySelectorAll('.filter-tab').forEach(tab => {
+            const tabFilter = tab.dataset.filter;
+            tab.classList.toggle('active', tabFilter === filter);
+        });
+
+        applyFilters();
+    }
+
+    function toggleSearch() {
+        const searchBar = document.getElementById('search-bar');
+        const searchInput = document.getElementById('filter-search');
+
+        if (searchBar.classList.contains('hidden')) {
+            searchBar.classList.remove('hidden');
+            searchInput.focus();
+        } else {
+            searchBar.classList.add('hidden');
+            searchInput.value = '';
+            applyFilters();
+        }
+    }
+
+    function applyFilters() {
+        const picFilter = document.getElementById('filter-pic').value;
+        const searchText = document.getElementById('filter-search').value.trim().toLowerCase();
+
+        let filtered = allOrders;
+
+        // ステータスフィルター
+        if (currentFilter) {
+            filtered = filtered.filter(o => o.status === currentFilter);
+        }
+
+        // 担当者フィルター
+        if (picFilter) {
+            filtered = filtered.filter(o => o.picEmail === picFilter);
+        }
+
+        // テキスト検索
+        if (searchText) {
+            filtered = filtered.filter(o =>
+                (o.patient && o.patient.toLowerCase().includes(searchText)) ||
+                (o.drug && o.drug.toLowerCase().includes(searchText))
+            );
+        }
+
+        renderList(filtered);
+    }
+
+    // ===== リスト描画 =====
+    function renderList(orders) {
+        const container = document.getElementById('order-list');
+        const bulkMode = selectedIds.size > 0;
+
+        if (!orders || orders.length === 0) {
+            container.innerHTML = `
+      <div class="empty-state">
+        <span class="material-icons">check_circle</span>
+        <p>表示する発注データがありません</p>
+      </div>`;
+            return;
+        }
+
+        const today = new Date().toISOString().split('T')[0];
+        let html = '';
+
+        orders.forEach(o => {
+            const isUrgent = o.deadline <= today;
+            const isSelected = selectedIds.has(o.id);
+
+            const statusClass = o.status === '未発注' ? 'status-pending' : 'status-ordered';
+            const cardClass = `order-card ${statusClass}${isSelected ? ' selected' : ''}${isUrgent ? ' urgent' : ''}`;
+            const badgeClass = o.status === '未発注' ? 'pending' : 'ordered';
+            const checkboxShow = bulkMode ? 'show' : '';
+
+            // 期限カウントダウン計算
+            const countdown = getCountdown(o.deadline);
+
+            const dataJson = JSON.stringify(o).replace(/"/g, '&quot;');
+
+            html += `
+      <div class="${cardClass}" data-id="${o.id}">
+        <div class="card-checkbox ${checkboxShow}">
+          <input type="checkbox" ${isSelected ? 'checked' : ''} onclick="toggleSelect(event, '${o.id}')">
+        </div>
+        <div onclick="handleCardClick(event, ${dataJson})">
+          <div class="card-header">
+            <div class="drug-name">
+              <span class="emoji">💊</span>${o.drug || '(薬剤名なし)'}
+            </div>
+            <span class="status-badge ${badgeClass}">${o.status}</span>
+          </div>
+          <div class="patient-info">
+            <span class="material-icons">person</span>
+            ${o.patient} 様
+          </div>
+          <div class="card-footer">
+            <span class="deadline${isUrgent ? ' urgent' : ''}">
+              <span class="material-icons">${isUrgent ? 'warning' : 'event'}</span>
+              ${o.deadline}
+              <span class="countdown ${countdown.class}">${countdown.text}</span>
+            </span>
+            <span>担当: ${o.pic}</span>
+          </div>
+        </div>
+      </div>`;
+        });
+
+        container.innerHTML = html;
+        updateBulkBar();
+    }
+
+    // ===== カードクリック処理 =====
+    function handleCardClick(event, order) {
+        if (selectedIds.size > 0) {
+            toggleSelect(event, order.id);
+        } else {
+            openEditModal(order);
+        }
+    }
+
+    // ===== 一括選択 =====
+    function toggleSelect(event, id) {
+        event.stopPropagation();
+
+        if (selectedIds.has(id)) {
+            selectedIds.delete(id);
+        } else {
+            selectedIds.add(id);
+        }
+
+        applyFilters();
+    }
+
+    function updateBulkBar() {
+        const bulkBar = document.getElementById('bulk-bar');
+        const countSpan = document.getElementById('bulk-count');
+
+        if (selectedIds.size > 0) {
+            bulkBar.classList.add('show');
+            countSpan.innerText = `${selectedIds.size}件選択中`;
+            document.querySelectorAll('.card-checkbox').forEach(el => el.classList.add('show'));
+        } else {
+            bulkBar.classList.remove('show');
+            document.querySelectorAll('.card-checkbox').forEach(el => el.classList.remove('show'));
+        }
+    }
+
+    function cancelBulkSelect() {
+        selectedIds.clear();
+        applyFilters();
+    }
+
+    function bulkOrdered() {
+        if (selectedIds.size === 0) return;
+        if (!confirm(`${selectedIds.size}件を「発注済」に変更しますか？`)) return;
+
+        showLoading('一括更新中...');
+        const ids = Array.from(selectedIds);
+
+        google.script.run.withSuccessHandler(res => {
+            if (res.success) {
+                alert(`${res.count}件を更新しました`);
+                selectedIds.clear();
+                refreshList();
+            } else {
+                alert('エラー: ' + res.message);
+                hideLoading();
+            }
+        }).withFailureHandler(e => {
+            alert('通信エラー: ' + e);
+            hideLoading();
+        }).bulkUpdateStatus(ids, '発注済', currentUser.name);
+    }
+
+    function bulkDelete() {
+        if (selectedIds.size === 0) return;
+        if (!confirm(`${selectedIds.size}件を削除しますか？この操作は取り消せません。`)) return;
+
+        showLoading('一括削除中...');
+        const ids = Array.from(selectedIds);
+
+        google.script.run.withSuccessHandler(res => {
+            if (res.success) {
+                alert(`${res.count}件を削除しました`);
+                selectedIds.clear();
+                refreshList();
+            } else {
+                alert('エラー: ' + res.message);
+                hideLoading();
+            }
+        }).withFailureHandler(e => {
+            alert('通信エラー: ' + e);
+            hideLoading();
+        }).bulkDelete(ids, currentUser.name);
+    }
+
+    // ===== 登録 =====
+    function save() {
+        const form = {
+            patient: document.getElementById('patientSearch').value,
+            drug: document.getElementById('drug').value,
+            deadline: document.getElementById('deadline').value,
+            adminDate: document.getElementById('admin').value,
+            picEmail: document.getElementById('staff-email-hidden').value,
+            picName: document.getElementById('staff-name-display').value
+        };
+
+        if (!form.patient || !form.deadline) {
+            return alert('患者名と発注期限日は必須です');
+        }
+
+        if (!confirm('登録しますか？')) return;
+
+        showLoading('登録中...');
+        google.script.run.withSuccessHandler(res => {
+            if (res.success) {
+                alert('登録完了！');
+                closeModal('register-modal');
+                clearRegisterForm();
+                refreshList();
+            } else {
+                alert('エラー: ' + (res.message || res.details?.join('\n')));
+                hideLoading();
+            }
+        }).withFailureHandler(e => {
+            alert('通信エラー: ' + e);
+            hideLoading();
+        }).registerOrder(form);
+    }
+
+    function clearRegisterForm() {
+        document.getElementById('patientSearch').value = '';
+        document.getElementById('drug').value = '';
+        document.getElementById('deadline').value = '';
+        document.getElementById('admin').value = '';
+    }
+
+    // ===== 更新 =====
+    function updateOrder() {
+        const form = {
+            id: document.getElementById('edit-id').value,
+            patient: document.getElementById('edit-patient').value,
+            drug: document.getElementById('edit-drug').value,
+            deadline: document.getElementById('edit-deadline').value,
+            adminDate: document.getElementById('edit-admin').value,
+            picName: currentUser.name,
+            newPicEmail: document.getElementById('edit-pic-select').value,
+            updaterEmail: currentUser.email
+        };
+
+        if (!confirm('修正内容を保存しますか？')) return;
+
+        showLoading('保存中...');
+        google.script.run.withSuccessHandler(res => {
+            if (res.success) {
+                alert('保存しました');
+                closeModal('edit-modal');
+                refreshList();
+            } else {
+                alert('エラー: ' + (res.message || res.details?.join('\n')));
+                hideLoading();
+            }
+        }).withFailureHandler(e => {
+            alert('通信エラー: ' + e);
+            hideLoading();
+        }).updateOrderData(form);
+    }
+
+    // ===== 削除 =====
+    function deleteOrder() {
+        if (!confirm('本当に削除しますか？この操作は取り消せません。')) return;
+
+        const id = document.getElementById('edit-id').value;
+        const patient = document.getElementById('edit-patient').value;
+        const drug = document.getElementById('edit-drug').value;
+
+        showLoading('削除中...');
+        google.script.run.withSuccessHandler(res => {
+            if (res.success) {
+                alert('削除しました');
+                closeModal('edit-modal');
+                refreshList();
+            } else {
+                alert('エラー: ' + res.message);
+                hideLoading();
+            }
+        }).withFailureHandler(e => {
+            alert('通信エラー: ' + e);
+            hideLoading();
+        }).deleteOrder(id, patient, drug, currentUser.name);
+    }
+
+    // ===== ステータス変更 =====
+    function changeStatus(id, currentStatus) {
+        const nextStatus = currentStatus === '未発注' ? '発注済' : '納品済';
+        let confirmPerson = '';
+
+        if (nextStatus === '納品済') {
+            confirmPerson = prompt('納品を確認したスタッフの名前を入力してください', currentUser.name);
+            if (!confirmPerson) return;
+        }
+
+        if (!confirm(`「${nextStatus}」に変更し、通知を送りますか？`)) return;
+
+        closeModal('edit-modal');
+        showLoading('更新中...');
+
+        google.script.run.withSuccessHandler(res => {
+            if (res.success) {
+                alert('更新完了！');
+                refreshList();
+            } else {
+                alert('エラー: ' + res.message);
+                hideLoading();
+            }
+        }).withFailureHandler(e => {
+            alert('通信エラー: ' + e);
+            hideLoading();
+        }).updateStatus(id, nextStatus, confirmPerson, currentUser.name);
+    }
+
+    // ===== リスト更新 =====
+    function refreshList() {
+        setTimeout(() => {
+            google.script.run.withSuccessHandler(res => {
+                if (res.orders) {
+                    allOrders = res.orders;
+                    applyFilters();
+                }
+                hideLoading();
+            }).getLatestOrders();
+        }, 1000);
+    }
+
+    // ===== モーダル =====
+    function openRegisterModal() {
+        document.getElementById('register-modal').style.display = 'flex';
+    }
+
+    function openEditModal(order) {
+        document.getElementById('edit-id').value = order.id;
+        document.getElementById('edit-status').value = order.status;
+        document.getElementById('edit-patient').value = order.patient;
+        document.getElementById('edit-drug').value = order.drug;
+        document.getElementById('edit-deadline').value = order.deadline;
+        document.getElementById('edit-admin').value = order.adminDate || '';
+        document.getElementById('edit-pic-select').value = order.picEmail;
+
+        const actionArea = document.getElementById('status-action-area');
+        actionArea.innerHTML = '';
+
+        if (order.status === '未発注') {
+            actionArea.innerHTML = `
+      <button class="status-btn" style="background:var(--ordered);" onclick="changeStatus('${order.id}', '未発注')">
+        <span class="material-icons">local_shipping</span>発注済にする
+      </button>`;
+        } else if (order.status === '発注済') {
+            actionArea.innerHTML = `
+      <button class="status-btn" style="background:var(--delivered);" onclick="changeStatus('${order.id}', '発注済')">
+        <span class="material-icons">check_circle</span>納品完了
+      </button>`;
+        }
+
+        document.getElementById('edit-modal').style.display = 'flex';
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).style.display = 'none';
+    }
+
+    // ===== ローディング =====
+    function showLoading(text) {
+        const el = document.getElementById('app-loading');
+        el.style.display = 'flex';
+        el.querySelector('.spinner').style.display = 'block';
+        el.querySelector('.progress-box').style.display = 'none';
+        document.getElementById('skip-btn').style.display = 'none';
+        document.getElementById('loading-text').innerText = text;
+    }
+
+    function hideLoading() {
+        document.getElementById('app-loading').style.display = 'none';
+    }
+
+    // ===== ページ切替 =====
+    function switchPage(page) {
+        currentPage = page;
+
+        // ナビアイテムの更新
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.page === page);
+        });
+
+        // ページ表示切替
+        document.querySelectorAll('.page').forEach(p => {
+            p.classList.toggle('active', p.id === 'page-' + page);
+        });
+
+        // 新規登録ボタンの表示/非表示
+        document.querySelector('.action-bar').style.display = page === 'list' ? 'block' : 'none';
+
+        // 各ページの初期化
+        if (page === 'stats') {
+            loadStatistics();
+        } else if (page === 'calendar') {
+            renderCalendar();
+        } else if (page === 'history') {
+            loadHistory();
+        } else if (page === 'logs') {
+            loadLogs();
+        }
+    }
+
+    // ===== 統計ダッシュボード =====
+    let statsChart = null;
+    let pieChart = null;
+
+    function loadStatistics() {
+        const year = parseInt(document.getElementById('stats-year').value);
+        showLoading('統計データ読込中...');
+
+        google.script.run.withSuccessHandler(res => {
+            hideLoading();
+            if (res.success) {
+                renderStatistics(res);
+            } else {
+                alert('エラー: ' + res.message);
+            }
+        }).withFailureHandler(e => {
+            hideLoading();
+            alert('統計データ取得エラー: ' + e);
+        }).getStatistics(year);
+    }
+
+    function renderStatistics(data) {
+        const total = data.monthly.reduce((sum, m) => sum + m.count, 0);
+        document.getElementById('stats-total').innerText = total;
+        document.getElementById('stats-pending').innerText = data.byStatus['未発注'] || 0;
+        document.getElementById('stats-ordered').innerText = data.byStatus['発注済'] || 0;
+        document.getElementById('stats-overdue').innerText = data.overdueCount || 0;
+
+        renderMonthlyChart(data.monthly);
+        renderPicChart(data.byPic);
+    }
+
+    function renderMonthlyChart(monthly) {
+        const ctx = document.getElementById('chart-monthly').getContext('2d');
+
+        if (statsChart) statsChart.destroy();
+
+        const labels = monthly.map(m => {
+            const [year, month] = m.month.split('-');
+            return `${parseInt(month)}月`;
+        });
+        const counts = monthly.map(m => m.count);
+
+        statsChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '発注件数',
+                    data: counts,
+                    backgroundColor: '#00796b',
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: { beginAtZero: true }
+                }
+            }
+        });
+    }
+
+    function renderPicChart(byPic) {
+        const ctx = document.getElementById('chart-pic').getContext('2d');
+
+        if (pieChart) pieChart.destroy();
+
+        const labels = Object.keys(byPic);
+        const counts = Object.values(byPic);
+
+        if (labels.length === 0) {
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            return;
+        }
+
+        const colors = [
+            '#00796b', '#f57c00', '#d32f2f', '#388e3c', '#1976d2',
+            '#7b1fa2', '#c2185b', '#0097a7', '#689f38', '#fbc02d'
+        ];
+
+        pieChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: counts,
+                    backgroundColor: colors.slice(0, labels.length)
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            boxWidth: 12,
+                            padding: 8
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // ===== カレンダー機能 =====
+    let calendarDate = new Date();
+
+    function renderCalendar() {
+        const year = calendarDate.getFullYear();
+        const month = calendarDate.getMonth();
+
+        // タイトル更新
+        document.getElementById('calendar-title').innerText = `${year}年${month + 1}月`;
+
+        // カレンダーグリッド生成
+        const grid = document.getElementById('calendar-grid');
+        grid.innerHTML = '';
+
+        // 月の最初の日と最後の日
+        const firstDay = new Date(year, month, 1);
+        const lastDay = new Date(year, month + 1, 0);
+
+        // 前月の日を埋める
+        const startDayOfWeek = firstDay.getDay();
+        const prevMonthLastDay = new Date(year, month, 0).getDate();
+
+        for (let i = startDayOfWeek - 1; i >= 0; i--) {
+            const day = prevMonthLastDay - i;
+            const dateStr = formatDateForCal(new Date(year, month - 1, day));
+            grid.appendChild(createDayCell(day, dateStr, true, getDayOfWeek(year, month - 1, day)));
+        }
+
+        // 当月の日
+        const today = new Date();
+        const todayStr = formatDateForCal(today);
+
+        for (let day = 1; day <= lastDay.getDate(); day++) {
+            const dateStr = formatDateForCal(new Date(year, month, day));
+            const isToday = dateStr === todayStr;
+            const dayOfWeek = getDayOfWeek(year, month, day);
+            grid.appendChild(createDayCell(day, dateStr, false, dayOfWeek, isToday));
+        }
+
+        // 翌月の日を埋める
+        const totalCells = grid.children.length;
+        const remainingCells = 42 - totalCells; // 6行 × 7日
+
+        for (let day = 1; day <= remainingCells; day++) {
+            const dateStr = formatDateForCal(new Date(year, month + 1, day));
+            grid.appendChild(createDayCell(day, dateStr, true, getDayOfWeek(year, month + 1, day)));
+        }
+    }
+
+    function createDayCell(day, dateStr, isOtherMonth, dayOfWeek, isToday = false) {
+        const cell = document.createElement('div');
+        cell.className = 'cal-day';
+
+        if (isOtherMonth) cell.classList.add('other-month');
+        if (isToday) cell.classList.add('today');
+        if (dayOfWeek === 0) cell.classList.add('sun');
+        if (dayOfWeek === 6) cell.classList.add('sat');
+
+        // 日付番号
+        const dayNum = document.createElement('div');
+        dayNum.className = 'day-number';
+        dayNum.innerText = day;
+        cell.appendChild(dayNum);
+
+        // 発注データのドット表示
+        const ordersOnDay = allOrders.filter(o => o.deadline === dateStr);
+        if (ordersOnDay.length > 0) {
+            const dotsContainer = document.createElement('div');
+            dotsContainer.className = 'day-dots';
+
+            // 最大5個まで表示
+            ordersOnDay.slice(0, 5).forEach(o => {
+                const dot = document.createElement('div');
+                dot.className = 'day-dot ' + (o.status === '未発注' ? 'pending' : 'ordered');
+                dotsContainer.appendChild(dot);
+            });
+
+            cell.appendChild(dotsContainer);
+        }
+
+        // クリックイベント
+        cell.onclick = () => showDayPopover(dateStr, ordersOnDay);
+
+        return cell;
+    }
+
+    function formatDateForCal(date) {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+
+    function getDayOfWeek(year, month, day) {
+        return new Date(year, month, day).getDay();
+    }
+
+    function changeMonth(delta) {
+        calendarDate.setMonth(calendarDate.getMonth() + delta);
+        renderCalendar();
+    }
+
+    function goToToday() {
+        calendarDate = new Date();
+        renderCalendar();
+    }
+
+    // ===== 日付ポップオーバー =====
+    function showDayPopover(dateStr, orders) {
+        // 既存のポップオーバーを削除
+        closeDayPopover();
+
+        // オーバーレイ
+        const overlay = document.createElement('div');
+        overlay.className = 'popover-overlay show';
+        overlay.onclick = closeDayPopover;
+        document.body.appendChild(overlay);
+
+        // ポップオーバー
+        const popover = document.createElement('div');
+        popover.className = 'day-popover show';
+        popover.id = 'day-popover';
+
+        // 日付を整形
+        const dateObj = new Date(dateStr);
+        const displayDate = `${dateObj.getMonth() + 1}月${dateObj.getDate()}日`;
+
+        let html = `
+            <div class="popover-header">
+                <h4>📅 ${displayDate}の発注</h4>
+                <button class="popover-close" onclick="closeDayPopover()">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+        `;
+
+        // 新規登録ボタンを追加
+        html += `
+            <button class="popover-add-btn" onclick="openRegisterFromCalendar('${dateStr}')">
+                <span class="material-icons">add_circle</span>
+                この日に新規登録
+            </button>
+        `;
+
+        if (orders.length === 0) {
+            html += '<div class="popover-empty">この日の発注はまだありません</div>';
+        } else {
+            orders.forEach(o => {
+                const statusClass = o.status === '未発注' ? 'pending' : 'ordered';
+                const dataJson = JSON.stringify(o).replace(/"/g, '&quot;');
+                html += `
+                    <div class="popover-item ${statusClass}" onclick="openEditFromPopover(${dataJson})">
+                        <div class="popover-item-main">
+                            <div class="popover-item-drug">💊 ${o.drug || '(薬剤名なし)'}</div>
+                            <div class="popover-item-patient">${o.patient} 様 / ${o.pic}</div>
+                        </div>
+                        <span class="status-badge ${statusClass}">${o.status}</span>
+                    </div>
+                `;
+            });
+        }
+
+        popover.innerHTML = html;
+        document.body.appendChild(popover);
+    }
+
+    function closeDayPopover() {
+        const popover = document.getElementById('day-popover');
+        if (popover) popover.remove();
+
+        const overlay = document.querySelector('.popover-overlay');
+        if (overlay) overlay.remove();
+    }
+
+    function openEditFromPopover(order) {
+        closeDayPopover();
+        openEditModal(order);
+    }
+
+    function openRegisterFromCalendar(dateStr) {
+        closeDayPopover();
+
+        // 新規登録モーダルを開く
+        document.getElementById('register-modal').style.display = 'flex';
+
+        // 発注期限日をプリセット
+        document.getElementById('deadline').value = dateStr;
+    }
+
+    // ===== 期限カウントダウン =====
+    function getCountdown(deadlineStr) {
+        if (!deadlineStr) return { text: '', class: '' };
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const deadline = new Date(deadlineStr);
+        deadline.setHours(0, 0, 0, 0);
+
+        const diffTime = deadline - today;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays < 0) {
+            return { text: `${Math.abs(diffDays)}日超過`, class: 'overdue' };
+        } else if (diffDays === 0) {
+            return { text: '今日', class: 'overdue' };
+        } else if (diffDays === 1) {
+            return { text: '明日', class: 'urgent' };
+        } else if (diffDays <= 3) {
+            return { text: `あと${diffDays}日`, class: 'urgent' };
+        } else if (diffDays <= 7) {
+            return { text: `あと${diffDays}日`, class: 'normal' };
+        } else {
+            return { text: '', class: '' };
+        }
+    }
+
+    // ===== ダークモード =====
+    let isDarkMode = localStorage.getItem('darkMode') === 'true';
+
+    // 初期化時にダークモード適用
+    if (isDarkMode) {
+        document.body.classList.add('dark-mode');
+        setTimeout(() => {
+            const icon = document.getElementById('dark-mode-icon');
+            if (icon) icon.innerText = 'light_mode';
+        }, 100);
+    }
+
+    function toggleDarkMode() {
+        isDarkMode = !isDarkMode;
+        document.body.classList.toggle('dark-mode', isDarkMode);
+        localStorage.setItem('darkMode', isDarkMode);
+
+        const icon = document.getElementById('dark-mode-icon');
+        icon.innerText = isDarkMode ? 'light_mode' : 'dark_mode';
+    }
+
+    // ===== 履歴ページ =====
+    let historyData = [];
+
+    function loadHistory() {
+        const days = parseInt(document.getElementById('history-period').value);
+        showLoading('履歴を読み込み中...');
+
+        google.script.run.withSuccessHandler(res => {
+            hideLoading();
+            if (res.success) {
+                historyData = res.orders || [];
+                renderHistory();
+            } else {
+                alert('エラー: ' + res.message);
+            }
+        }).withFailureHandler(e => {
+            hideLoading();
+            alert('履歴取得エラー: ' + e);
+        }).getDeliveredOrders(days);
+    }
+
+    function renderHistory() {
+        const container = document.getElementById('history-list');
+
+        if (!historyData || historyData.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-icons">check_circle</span>
+                    <p>この期間の納品済みデータはありません</p>
+                </div>`;
+            return;
+        }
+
+        let html = '';
+        historyData.forEach(o => {
+            html += `
+                <div class="history-card">
+                    <div class="card-header">
+                        <div class="drug-name">💊 ${o.drug || '(薬剤名なし)'}</div>
+                        <span class="delivered-badge">納品済</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="material-icons">person</span>
+                        ${o.patient} 様
+                    </div>
+                    <div class="info-row">
+                        <span class="material-icons">check_circle</span>
+                        納品日: ${o.deliveredDate || '-'}
+                    </div>
+                    <div class="info-row">
+                        <span class="material-icons">badge</span>
+                        確認者: ${o.confirmedBy || '-'}
+                    </div>
+                </div>`;
+        });
+
+        container.innerHTML = html;
+    }
+
+    // ===== 操作ログ機能 =====
+    let allLogs = [];
+    let filteredLogs = [];
+
+    function loadLogs() {
+        const days = parseInt(document.getElementById('log-period').value);
+        showLoading('操作ログを読み込み中...');
+
+        google.script.run.withSuccessHandler(res => {
+            hideLoading();
+            if (res.success) {
+                allLogs = res.logs || [];
+                populateLogUserFilter();
+                filterLogs();
+            } else {
+                alert('エラー: ' + res.message);
+            }
+        }).withFailureHandler(e => {
+            hideLoading();
+            alert('ログ取得エラー: ' + e);
+        }).getOperationLogs(days);
+    }
+
+    function populateLogUserFilter() {
+        const userSelect = document.getElementById('log-user');
+        const users = [...new Set(allLogs.map(l => l.operator).filter(u => u))];
+
+        userSelect.innerHTML = '<option value="">全ユーザー</option>';
+        users.forEach(u => {
+            userSelect.innerHTML += `<option value="${u}">${u}</option>`;
+        });
+    }
+
+    function filterLogs() {
+        const actionFilter = document.getElementById('log-action').value;
+        const userFilter = document.getElementById('log-user').value;
+
+        filteredLogs = allLogs.filter(l => {
+            if (actionFilter && !l.action.includes(actionFilter)) return false;
+            if (userFilter && l.operator !== userFilter) return false;
+            return true;
+        });
+
+        renderLogsSummary();
+        renderLogs();
+    }
+
+    function renderLogsSummary() {
+        const container = document.getElementById('logs-summary');
+
+        // 操作種別のカウント
+        const counts = {
+            register: 0,
+            update: 0,
+            delete: 0,
+            status: 0
+        };
+
+        filteredLogs.forEach(l => {
+            if (l.action.includes('登録')) counts.register++;
+            else if (l.action.includes('更新') || l.action.includes('変更')) counts.update++;
+            else if (l.action.includes('削除')) counts.delete++;
+            else if (l.action.includes('ステータス')) counts.status++;
+        });
+
+        container.innerHTML = `
+            <div class="log-stat">
+                <div class="log-stat-value">${filteredLogs.length}</div>
+                <div class="log-stat-label">総操作数</div>
+            </div>
+            <div class="log-stat">
+                <div class="log-stat-value" style="color:var(--primary)">${counts.register}</div>
+                <div class="log-stat-label">登録</div>
+            </div>
+            <div class="log-stat">
+                <div class="log-stat-value" style="color:var(--ordered)">${counts.update}</div>
+                <div class="log-stat-label">更新</div>
+            </div>
+            <div class="log-stat">
+                <div class="log-stat-value" style="color:var(--accent)">${counts.delete}</div>
+                <div class="log-stat-label">削除</div>
+            </div>
+        `;
+    }
+
+    function renderLogs() {
+        const container = document.getElementById('logs-list');
+
+        if (!filteredLogs || filteredLogs.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-icons">history</span>
+                    <p>この期間の操作ログはありません</p>
+                </div>`;
+            return;
+        }
+
+        let html = '';
+        filteredLogs.forEach(l => {
+            const iconInfo = getLogIconInfo(l.action);
+
+            html += `
+                <div class="log-item">
+                    <div class="log-icon ${iconInfo.class}">${iconInfo.icon}</div>
+                    <div class="log-content">
+                        <div class="log-action">${l.action}</div>
+                        <div class="log-details">${l.details || ''}</div>
+                        <div class="log-meta">
+                            <span><span class="material-icons">schedule</span>${l.timestamp}</span>
+                            <span><span class="material-icons">person</span>${l.operator || '-'}</span>
+                        </div>
+                    </div>
+                </div>`;
+        });
+
+        container.innerHTML = html;
+    }
+
+    function getLogIconInfo(action) {
+        if (action.includes('登録')) return { icon: '➕', class: 'register' };
+        if (action.includes('削除')) return { icon: '🗑️', class: 'delete' };
+        if (action.includes('ステータス')) return { icon: '🔄', class: 'status' };
+        if (action.includes('担当者')) return { icon: '👤', class: 'pic' };
+        return { icon: '✏️', class: 'update' };
+    }
+</script>

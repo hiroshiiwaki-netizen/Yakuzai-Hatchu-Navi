@@ -1,0 +1,10 @@
+# Git管理から除外するファイル
+.clasp.json
+.clasprc.json
+node_modules/
+.DS_Store
+Thumbs.db
+_backup/
+.vscode/
+.idea/
+*.log

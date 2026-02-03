@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!-- 薬剤発注ナビ v23.0 - 最終更新: 2026-01-02 -->
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  
+  <style>
+    :root { --primary: #00796b; --accent: #d32f2f; --ordered: #f57c00; --bg: #f5f7f8; }
+    body { font-family: 'Noto Sans JP', sans-serif; background: var(--bg); margin: 0; padding: 0; padding-bottom: 80px; }
+    
+    header { background: var(--primary); color: white; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100; }
+    h1 { margin: 0; font-size: 1.1rem; }
+    .user-info { font-size: 0.75rem; text-align: right; line-height: 1.2; }
+    .user-name { font-weight: bold; font-size: 0.9rem; display: block; }
+    .container { padding: 15px; max-width: 800px; margin: 0 auto; }
+    
+    /* カード */
+    .order-card { background: white; padding: 16px; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.05); margin-bottom: 12px; position: relative; display: flex; flex-direction: column; gap: 4px; cursor: pointer; transition: transform 0.1s; }
+    .order-card:active { transform: scale(0.98); }
+    .card-main { padding-right: 90px; }
+    .drug-name { font-size: 1.25rem; font-weight: bold; color: #333; line-height: 1.4; margin-bottom: 4px; }
+    .patient-name { font-size: 1rem; font-weight: bold; color: #555; display: flex; align-items: center; gap: 4px; }
+    .patient-name .material-icons { font-size: 18px; color: #999; }
+    .pic-name { font-size: 0.8rem; color: #888; margin-top: 4px; }
+    .status-badge { position: absolute; top: 16px; right: 16px; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: bold; color: white; text-align: center; min-width: 70px; }
+    .badge-pending { background-color: var(--accent); }
+    .badge-ordered { background-color: var(--ordered); }
+    .deadline-info { position: absolute; top: 50px; right: 16px; font-size: 0.8rem; font-weight: bold; color: #666; text-align: right; }
+    .deadline-urgent { color: var(--accent); }
+
+    /* モーダル */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 200; display: none; justify-content: center; align-items: center; padding: 20px; }
+    .modal-content { background: white; padding: 20px; border-radius: 12px; width: 100%; max-width: 400px; box-shadow: 0 4px 20px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto; }
+    .modal-close { float: right; cursor: pointer; font-size: 24px; color: #999; }
+    
+    .search-container { position: relative; }
+    #suggestions, #edit-suggestions { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-radius: 0 0 8px 8px; max-height: 250px; overflow-y: auto; z-index: 9999; box-shadow: 0 4px 10px rgba(0,0,0,0.2); display: none; }
+    .suggestion-item { padding: 14px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 16px; }
+    .suggestion-item:active { background-color: #e0f2f1; }
+    .suggestion-sub { font-size: 0.8em; color: #888; margin-left: 8px; }
+    
+    label { font-size: 13px; font-weight: bold; color: #666; margin-top: 10px; display: block; }
+    input { width: 100%; padding: 12px; margin: 8px 0; border-radius: 8px; border: 1px solid #ddd; font-size: 16px; box-sizing: border-box; outline: none; }
+    input[readonly] { background-color: #f0f0f0; color: #555; }
+    button.primary-btn { width: 100%; padding: 14px; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; margin-top: 20px; cursor: pointer; }
+    button.status-btn { width: 100%; padding: 14px; color: white; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; margin-top: 10px; cursor: pointer; }
+    button.delete-btn { width: 100%; padding: 10px; background: white; color: #999; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; margin-top: 30px; cursor: pointer; }
+    .fab { position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; background: var(--primary); border-radius: 50%; color: white; display: flex; justify-content: center; align-items: center; box-shadow: 0 4px 10px rgba(0,0,0,0.3); cursor: pointer; z-index: 150; }
+    
+    #app-loading { position: fixed; inset: 0; background: white; z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; }
+    .spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-box { width: 80%; max-width: 300px; background: #eee; height: 6px; border-radius: 3px; overflow: hidden; margin-top: 10px; }
+    .progress-bar { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
+    #loading-text { font-size: 0.9rem; color: #666; margin-top: 10px; min-height: 1.2em; }
+    #skip-btn { margin-top: 20px; padding: 8px 16px; background: #666; color: white; border: none; border-radius: 20px; cursor: pointer; font-size: 0.8rem; display: none; }
+  </style>
+</head>
+<body>
+  <div id="app-loading">
+    <div class="spinner"></div>
+    <div class="progress-box"><div class="progress-bar" id="progress-bar"></div></div>
+    <p id="loading-text">アプリを起動しています...</p>
+    <button id="skip-btn" onclick="forceStart()">⚠ 読込をスキップして起動</button>
+  </div>
+
+  <header>
+    <h1>薬剤発注ナビ</h1>
+    <div class="user-info">
+      ログイン中<br>
+      <span class="user-name" id="header-username">--</span>
+    </div>
+  </header>
+
+  <div class="container">
+    <h3 style="color:#666; font-size:0.9rem; margin-bottom:10px;">発注・納品待ちリスト（期限順）</h3>
+    <div id="order-list"></div>
+  </div>
+
+  <div class="fab" onclick="openRegisterModal()"><span class="material-icons" style="font-size:32px;">add</span></div>
+
+  <div id="register-modal" class="modal-overlay">
+    <div class="modal-content">
+      <span class="material-icons modal-close" onclick="closeModal('register-modal')">close</span>
+      <h3 style="margin-top:0; color:var(--primary);">💊 新規発注登録</h3>
+      <label>患者名</label>
+      <div class="search-container">
+        <input type="text" id="patientSearch" placeholder="氏名を入力..." autocomplete="off">
+        <div id="suggestions"></div>
+      </div>
+      <label>薬剤名</label>
+      <input type="text" id="drug" placeholder="例：〇〇注射液">
+      <label>発注期限日 <span style="color:red">*</span></label>
+      <input type="date" id="deadline">
+      <label>投与予定日</label>
+      <input type="date" id="admin">
+      <label>担当者 (あなた)</label>
+      <input type="text" id="staff-name-display" readonly>
+      <input type="hidden" id="staff-email-hidden">
+      <button class="primary-btn" onclick="save()">登録する</button>
+    </div>
+  </div>
+
+  <div id="edit-modal" class="modal-overlay">
+    <div class="modal-content">
+      <span class="material-icons modal-close" onclick="closeModal('edit-modal')">close</span>
+      <h3 style="margin-top:0; color:#555;">📋 詳細・編集</h3>
+      <input type="hidden" id="edit-id">
+      <input type="hidden" id="edit-status">
+      <label>患者名</label>
+      <div class="search-container">
+        <input type="text" id="edit-patient" placeholder="氏名を入力..." autocomplete="off">
+        <div id="edit-suggestions"></div>
+      </div>
+      <label>薬剤名</label>
+      <input type="text" id="edit-drug">
+      <label>発注期限日</label>
+      <input type="date" id="edit-deadline">
+      <label>投与予定日</label>
+      <input type="date" id="edit-admin">
+      <label>担当者</label>
+      <input type="text" id="edit-pic" readonly>
+      <div id="status-action-area"></div>
+      <button class="primary-btn" style="background:#666; margin-top:10px;" onclick="updateOrder()">内容を修正して保存</button>
+      <button class="delete-btn" onclick="deleteOrder()">この予定を削除</button>
+    </div>
+  </div>
+
+  <script>
+    let patientsMaster = [];
+    let staffMaster = [];
+    let currentUser = {};
+    let loadTimer;
+
+    window.onload = () => { 
+      loadTimer = setTimeout(() => {
+        document.getElementById('skip-btn').style.display = 'block';
+        document.getElementById('loading-text').innerText = '通信が遅れています...';
+      }, 5000);
+      step1_Auth(); 
+    };
+
+    function forceStart() {
+      clearTimeout(loadTimer);
+      document.getElementById('app-loading').style.display = 'none';
+    }
+    function updateProgress(percent, text) {
+      document.getElementById('progress-bar').style.width = percent + '%';
+      document.getElementById('loading-text').innerText = text;
+    }
+
+    // 認証
+    function step1_Auth() {
+      updateProgress(10, 'ユーザー認証中...');
+      google.script.run.withSuccessHandler(res => {
+        if(!res.success) console.error(res.message);
+        currentUser = { email: res.email, name: res.email };
+        document.getElementById('header-username').innerText = res.email;
+        document.getElementById('staff-email-hidden').value = res.email;
+        step2_Masters();
+      }).withFailureHandler(e => step2_Masters()).step1_SimpleAuth();
+    }
+    // マスター
+    function step2_Masters() {
+      updateProgress(40, 'マスターデータ取得中...');
+      google.script.run.withSuccessHandler(res => {
+        if(res.patients) patientsMaster = res.patients;
+        if(res.staff) {
+          staffMaster = res.staff;
+          const me = staffMaster.find(s => s.email === currentUser.email);
+          if(me) {
+            currentUser.name = me.name;
+            document.getElementById('header-username').innerText = me.name;
+            document.getElementById('staff-name-display').value = me.name;
+          } else {
+            document.getElementById('staff-name-display').value = currentUser.email;
+          }
+        }
+        step3_Orders();
+      }).withFailureHandler(e => step3_Orders()).step2_GetMasters();
+    }
+    // リスト
+    function step3_Orders() {
+      updateProgress(70, '発注リスト取得中...');
+      google.script.run.withSuccessHandler(res => {
+        if(res.orders) renderList(res.orders);
+        updateProgress(100, '完了');
+        clearTimeout(loadTimer);
+        setTimeout(() => document.getElementById('app-loading').style.display = 'none', 300);
+      }).withFailureHandler(e => alert('リスト読込失敗: ' + e)).step3_GetOrders();
+    }
+
+    // 検索
+    function setupSearch(inputId, suggestId) {
+      const input = document.getElementById(inputId);
+      const box = document.getElementById(suggestId);
+      input.addEventListener('input', function() {
+        const val = this.value.trim();
+        box.innerHTML = '';
+        if (!val) { box.style.display = 'none'; return; }
+        const matches = patientsMaster.filter(p => (p.name && p.name.includes(val)) || (p.kana && p.kana.includes(val)));
+        if (matches.length > 0) {
+          box.style.display = 'block';
+          matches.slice(0, 15).forEach(p => {
+            const div = document.createElement('div');
+            div.className = 'suggestion-item';
+            div.innerHTML = `${p.name}<span class="suggestion-sub">${p.kana || ''}</span>`;
+            div.onmousedown = (e) => { e.preventDefault(); input.value = p.name; box.style.display = 'none'; };
+            box.appendChild(div);
+          });
+        } else { box.style.display = 'none'; }
+      });
+      document.addEventListener('click', function(e) { if (e.target !== input && e.target !== box) box.style.display = 'none'; });
+    }
+    setupSearch('patientSearch', 'suggestions');
+    setupSearch('edit-patient', 'edit-suggestions');
+
+    // --- 登録 ---
+    function save() {
+      const form = {
+        patient: document.getElementById('patientSearch').value,
+        drug: document.getElementById('drug').value,
+        deadline: document.getElementById('deadline').value,
+        adminDate: document.getElementById('admin').value,
+        picEmail: document.getElementById('staff-email-hidden').value,
+        picName: document.getElementById('staff-name-display').value
+      };
+      if(!form.patient || !form.deadline) return alert('必須項目を入力してください');
+      if(!confirm('登録しますか？')) return;
+      showLoading('登録中...');
+      google.script.run.withSuccessHandler(res => {
+        if(res.success) {
+          alert('登録完了！');
+          closeModal('register-modal');
+          document.getElementById('patientSearch').value = '';
+          document.getElementById('drug').value = '';
+          document.getElementById('deadline').value = '';
+          document.getElementById('admin').value = '';
+          refreshList();
+        } else {
+          alert('エラー: ' + res.message);
+          hideLoading();
+        }
+      }).withFailureHandler(e => { alert('通信エラー: '+e); hideLoading(); }).registerOrder(form);
+    }
+
+    // --- 更新 ---
+    function updateOrder() {
+      const form = {
+        id: document.getElementById('edit-id').value,
+        patient: document.getElementById('edit-patient').value,
+        drug: document.getElementById('edit-drug').value,
+        deadline: document.getElementById('edit-deadline').value,
+        adminDate: document.getElementById('edit-admin').value,
+        picName: currentUser.name
+      };
+      if(!confirm('修正内容を保存しますか？')) return;
+      showLoading('修正中...');
+      google.script.run.withSuccessHandler(res => {
+        if(res.success) {
+          alert('修正しました');
+          closeModal('edit-modal');
+          refreshList();
+        } else {
+          alert('エラー: ' + res.message);
+          hideLoading();
+        }
+      }).withFailureHandler(e => { alert('通信エラー: '+e); hideLoading(); }).updateOrderData(form);
+    }
+
+    // --- 削除 ---
+    function deleteOrder() {
+      if(!confirm('本当に削除しますか？')) return;
+      const id = document.getElementById('edit-id').value;
+      const patient = document.getElementById('edit-patient').value;
+      const drug = document.getElementById('edit-drug').value;
+      showLoading('削除中...');
+      google.script.run.withSuccessHandler(res => {
+        if(res.success) {
+          alert('削除しました');
+          closeModal('edit-modal');
+          refreshList();
+        } else {
+          alert('エラー: ' + res.message);
+          hideLoading();
+        }
+      }).withFailureHandler(e => { alert('通信エラー: '+e); hideLoading(); }).deleteOrder(id, patient, drug, currentUser.name);
+    }
+
+    // --- ステータス ---
+    function changeStatus(id, currentStatus) {
+      const nextStatus = currentStatus === '未発注' ? '発注済' : '納品済';
+      let confirmPerson = '';
+      if(nextStatus === '納品済') {
+        confirmPerson = prompt('納品を確認したスタッフの名前を入力してください', currentUser.name);
+        if(!confirmPerson) return;
+      }
+      if(!confirm(`「${nextStatus}」に変更し、通知を送りますか？`)) return;
+      closeModal('edit-modal');
+      showLoading('更新中...');
+      google.script.run.withSuccessHandler(res => {
+        if(res.success) {
+          alert('更新完了！');
+          refreshList();
+        } else {
+          alert('エラー: ' + res.message);
+          hideLoading();
+        }
+      }).withFailureHandler(e => { alert('通信エラー: '+e); hideLoading(); }).updateStatus(id, nextStatus, confirmPerson, currentUser.name);
+    }
+
+    function refreshList() {
+      // 1秒待ってから取得（書き込み反映待ち）
+      setTimeout(() => {
+        google.script.run.withSuccessHandler(res => {
+          if(res.orders) renderList(res.orders);
+          hideLoading();
+        }).getLatestOrders();
+      }, 1000);
+    }
+
+    function renderList(orders) {
+      const container = document.getElementById('order-list');
+      if (!orders || orders.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:#999; margin-top:40px;">完了案件はありません。</p>';
+        return;
+      }
+      let html = '';
+      const today = new Date().toISOString().split('T')[0];
+      orders.forEach(o => {
+        const isUrgent = o.deadline <= today; 
+        const deadlineClass = isUrgent ? 'deadline-info deadline-urgent' : 'deadline-info';
+        let statusBadge = '';
+        if (o.status === '未発注') statusBadge = `<div class="status-badge badge-pending">未発注</div>`;
+        else if (o.status === '発注済') statusBadge = `<div class="status-badge badge-ordered">発注済</div>`;
+
+        const dataJson = JSON.stringify(o).replace(/"/g, '&quot;');
+        html += `
+          <div class="order-card" onclick="openEditModal(${dataJson})">
+            <div class="card-main">
+              <div class="drug-name">💊 ${o.drug}</div>
+              <div class="patient-name">
+                <span class="material-icons">person</span>${o.patient} 様
+              </div>
+              <div class="pic-name">担当: ${o.pic}</div>
+            </div>
+            ${statusBadge}
+            <div class="${deadlineClass}">期限: ${o.deadline}</div>
+          </div>`;
+      });
+      container.innerHTML = html;
+    }
+
+    function openEditModal(order) {
+      document.getElementById('edit-id').value = order.id;
+      document.getElementById('edit-status').value = order.status;
+      document.getElementById('edit-patient').value = order.patient;
+      document.getElementById('edit-drug').value = order.drug;
+      document.getElementById('edit-deadline').value = order.deadline;
+      document.getElementById('edit-admin').value = order.adminDate;
+      document.getElementById('edit-pic').value = order.pic;
+
+      const actionArea = document.getElementById('status-action-area');
+      actionArea.innerHTML = '';
+      if (order.status === '未発注') {
+        actionArea.innerHTML = `<button class="status-btn" style="background:#fb8c00;" onclick="changeStatus('${order.id}', '未発注')">発注済にする</button>`;
+      } else if (order.status === '発注済') {
+        actionArea.innerHTML = `<button class="status-btn" style="background:var(--primary);" onclick="changeStatus('${order.id}', '発注済')">納品完了</button>`;
+      }
+      document.getElementById('edit-modal').style.display = 'flex';
+    }
+
+    function openRegisterModal() { document.getElementById('register-modal').style.display = 'flex'; }
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    function showLoading(text) {
+      const el = document.getElementById('app-loading');
+      el.style.display = 'flex';
+      el.querySelector('.spinner').style.display = 'block';
+      el.querySelector('.progress-box').style.display = 'none';
+      document.getElementById('skip-btn').style.display = 'none';
+      document.getElementById('loading-text').innerText = text;
+    }
+    function hideLoading() { document.getElementById('app-loading').style.display = 'none'; }
+  </script>
+</body>
+</html>
