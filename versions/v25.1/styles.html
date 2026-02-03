@@ -623,6 +623,8 @@
 
     /* ===== 空状態 ===== */
     .empty-state {
+        grid-column: 1 / -1;
+        /* グリッド全体に表示 */
         text-align: center;
         padding: 60px 20px;
         color: var(--text-muted);
@@ -631,7 +633,8 @@
     .empty-state .material-icons {
         font-size: 64px;
         margin-bottom: 16px;
-        color: var(--border);
+        color: var(--primary);
+        /* 法人カラー（オレンジ）に変更 */
     }
 
     .empty-state p {
